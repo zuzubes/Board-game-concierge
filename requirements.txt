@@ -1,0 +1,18 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+requests
+
+# PDF parsing
+pymupdf
+
+# RAG
+langchain
+langchain-openai
+langchain-pinecone
+pinecone
+tiktoken
+openai
+
+# Tips & strategies (SerpApi - Brave AI Mode)
+serpapi

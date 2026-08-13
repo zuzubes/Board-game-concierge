@@ -1,0 +1,939 @@
+{
+  "id": "boardgameconcierge01",
+  "name": "Board Game Concierge",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.seenIncomingMessages = staticData.seenIncomingMessages || [];\nstaticData.incomingMessages = staticData.incomingMessages || [];\n\nconst message = $input.item.json.message || {};\nconst chatId = message.chat && message.chat.id;\nconst messageId = message.message_id;\nconst now = Date.now();\nconst seenCutoff = now - 10 * 60 * 1000;\nconst deleteCutoff = now - 48 * 60 * 60 * 1000;\n\nstaticData.seenIncomingMessages = staticData.seenIncomingMessages.filter((m) => m.timestamp >= seenCutoff);\nstaticData.incomingMessages = staticData.incomingMessages.filter((m) => m.timestamp >= deleteCutoff);\n\nif (chatId != null && messageId != null) {\n  const seen = staticData.seenIncomingMessages.some(\n    (m) => m.chatId === chatId && m.messageId === messageId,\n  );\n  if (seen) {\n    return [];\n  }\n\n  staticData.seenIncomingMessages.push({ chatId, messageId, timestamp: now });\n  staticData.incomingMessages.push({ chatId, messageId, timestamp: now });\n}\n\nreturn [{ json: $input.item.json }];"
+      },
+      "id": "code-dedupe-incoming",
+      "name": "Deduplicate Incoming Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        180,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Board Game Concierge - Telegram Workflow\n\nSetup:\n1. Create a Telegram credential (Bot Token from BotFather) and assign it to the Telegram Trigger, Send Typing Action, Send Reply, and Delete Old Messages nodes.\n2. IMPORTANT (n8n Cloud): n8n Cloud runs on n8n's own servers, so it cannot reach http://127.0.0.1:8000 - that only works if n8n is self-hosted on the SAME machine as the FastAPI service. For n8n Cloud, the HTTP Request node URLs must point to a PUBLIC URL for the FastAPI service (a tunnel like cloudflared/ngrok for testing, or a real deployment for production). The URL currently in this file is an ephemeral cloudflared quick-tunnel - it changes every time the tunnel restarts, so re-check/update all HTTP Request node URLs whenever that happens.\n3. Make sure the FastAPI service (`python -m uvicorn app.server:app`) is running and reachable at whatever URL you put in the HTTP Request nodes.\n4. Workflow static data (used for /reset's message tracking, see below) only persists across PRODUCTION executions - i.e. this workflow needs to be Active and triggered by real Telegram messages. Manually clicking \"Execute Workflow\" in the editor won't accumulate or read the same static data.\n\nRouting:\n- Every message triggers \"Send Typing Action\" immediately (parallel branch off the trigger, dead-end - doesn't block or feed into routing) so Telegram shows \"typing...\" while the real reply is worked out. It's a single ~5s indicator (Telegram Bot API limit), not a repeating one, so it can expire before slower LLM calls finish - that's expected for v1.\n- IMPORTANT: \"Send Reply\" uses operation sendMessage, which n8n's Telegram node defaults to appending \"This message was sent automatically with n8n\" to (additionalFields.appendAttribution defaults to true when unset, for nodeVersion >= 1.1) - it's explicitly set to false here. If you ever add another sendMessage-operation node to this workflow, remember to set it there too or that footer will silently reappear.\n- /start, or bare /help -> calls /greeting for a personalized onboarding message (randomly varied wording, see app/phrasing.py)\n- /reset -> clears this chat's session/pending state on the backend (POST /reset) AND best-effort deletes the last 48 hours of Telegram messages for this chat that the workflow has seen (both bot replies and incoming user commands, since Telegram's Bot API can delete incoming private-chat messages too). Message IDs are tracked in n8n's own workflow static data by \"Deduplicate Incoming Message\" and \"Track Sent Message\" (the former records incoming user messages, the latter records sendMessage responses) - NOT in the Python backend, which has no visibility into Telegram message IDs at all. \"Build Delete List\" reads/prunes those stores and fans out one deleteMessage call per message via \"Delete Old Messages\"; this runs in parallel with \"Call /reset API\" -> Send Reply (same fan-out pattern as the typing indicator) so a 0-message delete list doesn't block the confirmation reply from being sent.\n- /help <game name> (e.g. \"/help Wingspan\") -> calls /report for that game (same digest as the free-text trigger below)\n- /list -> calls /games for the current rulebook library\n- /tips -> calls /tips for a strategy tip on the session's game (SerpApi/Brave AI Mode, rotates through search snippets so repeat askers for the same game don't get the same tip - see app/clients/tips_client.py). Needs SERP_API_KEY in .env.\n- /ask <question> -> calls /ask (one grounded follow-up per session)\n- /recommend <player count> <preferences> -> calls /recommend (one primary pick + two alternatives; asks for player count if missing)\n- anything else (e.g. \"we're playing Ticket to Ride tonight\") -> calls /report\n\nCanned edge-case replies (unknown game, no session yet, missing player count, no rulebook coverage, etc.) are randomly picked from a few variants each - see app/phrasing.py - so repeat visitors don't see the exact same sentence every time.",
+        "height": 500,
+        "width": 460,
+        "color": 5
+      },
+      "id": "sticky-setup-notes",
+      "name": "Setup Notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ],
+      "webhookId": "a1b2c3d4-e5f6-47a8-9b0c-d1e2f3a4b5c6",
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "^/ask\\s+",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-ask",
+      "name": "Is Ask Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        560,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $input.item.json.message.text || '';\nconst question = text.replace(/^\\/ask\\s+/i, '').trim();\nreturn [{ json: { question } }];"
+      },
+      "id": "code-extract-question",
+      "name": "Extract Ask Question",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/ask",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ String($('Telegram Trigger').item.json.message.chat.id) }}"
+            },
+            {
+              "name": "question",
+              "value": "={{ $json.question }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "http-ask",
+      "name": "Call /ask API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        200
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/report",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ String($('Telegram Trigger').item.json.message.chat.id) }}"
+            },
+            {
+              "name": "message",
+              "value": "={{ $json.message.text }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "http-report",
+      "name": "Call /report API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        600
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "^/recommend\\b",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-recommend",
+      "name": "Is Recommend Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        840,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $input.item.json.message.text || '';\nconst preferences = text.replace(/^\\/recommend\\s*/i, '').trim();\nreturn [{ json: { preferences } }];"
+      },
+      "id": "code-extract-recommend",
+      "name": "Extract Recommend Params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/recommend",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ String($('Telegram Trigger').item.json.message.chat.id) }}"
+            },
+            {
+              "name": "preferences",
+              "value": "={{ $json.preferences }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "http-recommend",
+      "name": "Call /recommend API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        400
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.reply || 'Sorry, I am having trouble reaching my rulebook brain right now - mind trying again in a moment?' }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "telegram-send",
+      "name": "Send Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1680,
+        260
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "^/start\\b|^/help\\s*$",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-onboarding",
+      "name": "Is Onboarding Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "^/list\\b",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-list",
+      "name": "Is List Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        560,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/games",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "http-games",
+      "name": "Call /games API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        660
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "^/help\\s+\\S",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-help-game",
+      "name": "Is Help With Game",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        840,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/greeting",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "http-greeting",
+      "name": "Call /greeting API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        20
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendChatAction",
+        "chatId": "={{ String($json.message.chat.id) }}",
+        "action": "typing"
+      },
+      "id": "telegram-typing",
+      "name": "Send Typing Action",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        420
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "^/tips?\\b",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-tips",
+      "name": "Is Tips Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        560,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/tips",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ String($('Telegram Trigger').item.json.message.chat.id) }}"
+            },
+            {
+              "name": "game",
+              "value": "={{ $json.game }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "http-tips",
+      "name": "Call /tips API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        840,
+        600
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "jsCode": "const text = $input.item.json.message.text || '';\nconst game = text.replace(/^\\/tips?\\s*/i, '').trim();\nreturn [{ json: { game } }];"
+      },
+      "id": "code-extract-tips-game",
+      "name": "Extract Tips Game",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.sentMessages = staticData.sentMessages || [];\nstaticData.incomingMessages = staticData.incomingMessages || [];\n\nconst result = $json.result || {};\nconst messageId = result.message_id;\nconst chatId = result.chat && result.chat.id;\n\nif (messageId && chatId) {\n  staticData.sentMessages.push({ messageId, chatId, timestamp: Date.now() });\n}\n\n// Messages older than 48h can never be deleted via the Bot API anyway,\n// so there's no reason to keep tracking them - prune globally on every\n// write to keep the store naturally bounded.\nconst cutoff = Date.now() - 48 * 60 * 60 * 1000;\nstaticData.sentMessages = staticData.sentMessages.filter((m) => m.timestamp >= cutoff);\nstaticData.incomingMessages = staticData.incomingMessages.filter((m) => m.timestamp >= cutoff);\n\nreturn [{ json: {} }];"
+      },
+      "id": "code-track-sent-message",
+      "name": "Track Sent Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "^/reset\\b",
+              "operator": {
+                "type": "string",
+                "operation": "regex"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-reset",
+      "name": "Is Reset Command",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        280,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const chatId = $('Telegram Trigger').item.json.message.chat.id;\nconst staticData = $getWorkflowStaticData('global');\nconst sent = staticData.sentMessages || [];\nconst incoming = staticData.incomingMessages || [];\nconst cutoff = Date.now() - 48 * 60 * 60 * 1000;\n\nconst candidates = [...sent, ...incoming].filter((m) => m.chatId === chatId && m.timestamp >= cutoff);\nconst unique = new Map();\nfor (const message of candidates) {\n  unique.set(`${message.chatId}:${message.messageId}`, message);\n}\n\nstaticData.sentMessages = sent.filter((m) => m.chatId !== chatId);\nstaticData.incomingMessages = incoming.filter((m) => m.chatId !== chatId);\n\nreturn Array.from(unique.values()).map((m) => ({ json: { chatId: m.chatId, messageId: m.messageId } }));"
+      },
+      "id": "code-build-delete-list",
+      "name": "Build Delete List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "deleteMessage",
+        "chatId": "={{ $json.chatId }}",
+        "messageId": "={{ $json.messageId }}"
+      },
+      "id": "telegram-delete-old",
+      "name": "Delete Old Messages",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        840,
+        420
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "telegramApi": {
+          "id": "1",
+          "name": "Telegram Bot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/reset",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ String($('Telegram Trigger').item.json.message.chat.id) }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "http-reset",
+      "name": "Call /reset API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        260
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1000
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate Incoming Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Typing Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate Incoming Message": {
+      "main": [
+        [
+          {
+            "node": "Is Onboarding Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Ask Command": {
+      "main": [
+        [
+          {
+            "node": "Extract Ask Question",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Recommend Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Recommend Command": {
+      "main": [
+        [
+          {
+            "node": "Extract Recommend Params",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Call /report API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Recommend Params": {
+      "main": [
+        [
+          {
+            "node": "Call /recommend API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Ask Question": {
+      "main": [
+        [
+          {
+            "node": "Call /ask API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call /ask API": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call /recommend API": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call /report API": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Onboarding Command": {
+      "main": [
+        [
+          {
+            "node": "Call /greeting API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Reset Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is List Command": {
+      "main": [
+        [
+          {
+            "node": "Call /games API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Tips Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Help With Game": {
+      "main": [
+        [
+          {
+            "node": "Call /report API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Ask Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call /games API": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call /greeting API": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Tips Command": {
+      "main": [
+        [
+          {
+            "node": "Extract Tips Game",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Help With Game",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call /tips API": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Tips Game": {
+      "main": [
+        [
+          {
+            "node": "Call /tips API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply": {
+      "main": [
+        [
+          {
+            "node": "Track Sent Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Reset Command": {
+      "main": [
+        [
+          {
+            "node": "Build Delete List",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Call /reset API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is List Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Delete List": {
+      "main": [
+        [
+          {
+            "node": "Delete Old Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Call /reset API": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
