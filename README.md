@@ -1,7 +1,7 @@
 # Board Game Concierge
 
 Telegram bot that helps a regular board game group get through setup faster: it can explain rules from imported rulebooks, answer follow-up questions, give strategy tips, and recommend games from the local catalog.
-Telegram is the primary product surface, while the backend uses Pinecone for rulebook memory and a fallback search chain for live strategy lookups.
+Telegram is the primary product surface, while the backend uses Pinecone for rulebook memory, the local masterlist CSVs for recommendation candidates, and a fallback search chain for live strategy lookups.
 
 ## Setup
 
@@ -78,7 +78,7 @@ If you are using a tunnel for local development, update the HTTP Request node ba
 - `app/rag/vectorstore.py` - Pinecone retrieval for rulebook chunks.
 - `app/ingestion/` - PDF chunking and Pinecone indexing pipeline.
 - `app/clients/game_lookup.py` - local game name resolution against the masterlist CSV.
-- `app/clients/game_catalog.py` - recommendation candidate filtering and ranking from CSV data.
+- `app/clients/game_catalog.py` - recommendation candidate filtering and ranking from the masterlist CSVs.
 - `app/clients/tips_client.py` - external tip lookup with failover across SerpApi, Serper, and Tavily.
 - `app/memory.py` - in-memory chat session and pending-intent state.
 - `app/persona.py` - concierge voice and response rules.
@@ -102,7 +102,7 @@ The system is split into two layers:
    - `/report` retrieves rulebook chunks from Pinecone and synthesizes a grounded digest.
    - `/ask` answers one follow-up question from the active session context.
    - `/tips` prefers the active session game, otherwise resolves an explicit title, then queries the tip providers.
-   - `/recommend` filters the local board game catalog by player count, rating, playtime, and complexity.
+   - `/recommend` filters the local board game catalog by player count, rating, playtime, and complexity using the masterlist CSVs as the source of truth.
    - `/games` and `/greeting` return lightweight informational responses.
    - The tips flow uses SerpApi, Serper.dev, and Tavily because the BGG XML API would have required admin approval and Reddit's community-thread access has changed.
 

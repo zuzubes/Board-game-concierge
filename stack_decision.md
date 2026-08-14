@@ -3,8 +3,9 @@
 ## Primary Stack
 
 **n8n** for workflow orchestration
-**telegram** for user interface to interact with the application
-**search api** for getting tips and strategies
+**telegram** for the user interface to interact with the application
+**masterlist CSVs** for recommendation and game lookup data
+**search APIs** for getting tips and strategies
 
 
 ## Why n8n fits this problem
@@ -37,6 +38,15 @@ Pinecone is the retrieval layer because the concierge needs fast, managed vector
 - It removes the need to run a separate vector database locally.
 - It fits the small-to-medium corpus size of this MVP.
 - It supports the grounding requirement without extra infra overhead.
+
+## Why the masterlist CSVs fit the product
+
+The `/recommend` flow depends on the local masterlist CSVs because they provide a clean, editable source of truth for candidate games and their metadata.
+
+- They already contain the structured fields needed for filtering: player count, rating, playtime, and complexity.
+- They keep recommendation logic local and deterministic instead of depending on a live third-party games API.
+- They are easy to update as the curated game set changes.
+- They match the MVP's small catalog and keep the recommendation path fast.
 
 ## Why the search APIs fit the product
 
