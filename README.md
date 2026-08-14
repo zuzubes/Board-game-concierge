@@ -35,6 +35,7 @@ Optional backend settings:
 - `RAG_MIN_SCORE` defaults to `0.3`
 
 Telegram credentials are configured in n8n, not in this repo.
+Serper.dev and Tavily are called directly over HTTP from the backend, so they do not require extra Python SDK packages beyond the standard library and `requests` already listed here.
 
 ### 3. Build the vector index
 

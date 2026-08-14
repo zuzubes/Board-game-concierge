@@ -14,5 +14,5 @@ pinecone
 tiktoken
 openai
 
-# Tips & strategies (SerpApi - Brave AI Mode)
+# Tips & strategies (SerpApi SDK; Serper.dev and Tavily are called over direct HTTP)
 serpapi

@@ -293,6 +293,10 @@ def _clarify_game_reference(current_game_name: str, referenced_game_name: str) -
     )
 
 
+def _game_reference_conflict(text: str, current_game_name: str, referenced_game_name: str) -> bool:
+    return _is_short_reference(text) and _slugify(referenced_game_name) != _slugify(current_game_name)
+
+
 @app.post("/report", response_model=ConciergeResponse)
 def report(request: ReportRequest) -> ConciergeResponse:
     # The n8n workflow routes any plain-text message with no recognized

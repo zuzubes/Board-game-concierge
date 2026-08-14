@@ -47,6 +47,11 @@ The `/recommend` flow depends on the local masterlist CSVs because they provide 
 - They keep recommendation logic local and deterministic instead of depending on a live third-party games API.
 - They are easy to update as the curated game set changes.
 - They match the MVP's small catalog and keep the recommendation path fast.
+- The recommendation pipeline uses all four CSVs in the `masterlist/` folder for different roles:
+  - `boardgames_ranks.csv` for game-name resolution and expansion filtering
+  - `games.csv` as the main recommendation catalog
+  - `bgg_db_2018_01.csv` for playtime, category, and mechanic enrichment
+  - `BGG_Data_Set.csv` as a fallback mechanics source when the narrower dataset is missing tags
 
 ## Why the search APIs fit the product
 
