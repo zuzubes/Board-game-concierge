@@ -32,6 +32,17 @@ _AUTOMATION_LINE_RE = re.compile(
     r"^.*\b(sent|generated|created)\s+automatically\b.*$\n?",
     re.MULTILINE | re.IGNORECASE,
 )
+_TIP_LABEL_RE = re.compile(
+    r"^(?:"
+    r"tip(?:s)?"
+    r"|strategy(?:\s+tip)?"
+    r"|hint(?:s)?"
+    r"|advice"
+    r")\s*:\s*",
+    re.IGNORECASE,
+)
+_TIP_FOR_GAME_RE = re.compile(r"^tip\s+for\s+[^:]+:\s*", re.IGNORECASE)
+_ANSWER_PREFIX_RE = re.compile(r"^(?:answer|response|result)\s*:\s*", re.IGNORECASE)
 
 
 def _sanitize_reply(text: str) -> str:
@@ -43,6 +54,15 @@ def _sanitize_reply(text: str) -> str:
     text = _HEADING_RE.sub(lambda m: m.group(1).strip(), text)
     text = _AUTOMATION_LINE_RE.sub("", text)
     return text.strip()
+
+
+def _strip_tip_prefixes(text: str) -> str:
+    cleaned = " ".join(text.split()).strip()
+    cleaned = _TIP_FOR_GAME_RE.sub("", cleaned)
+    cleaned = _TIP_LABEL_RE.sub("", cleaned)
+    cleaned = _ANSWER_PREFIX_RE.sub("", cleaned)
+    cleaned = re.sub(r"^[-–—]+\s*", "", cleaned)
+    return cleaned.strip()
 
 
 def _format_chunks(chunks: list[dict]) -> str:
@@ -265,7 +285,7 @@ def build_tip(game_name: str, tip_snippet: str) -> str:
     # `/tips` is the most latency-sensitive path in the bot. Instead of
     # making a second LLM round-trip here, turn the cited snippet into a short
     # tip locally so the response stays fast and predictable.
-    text = " ".join(tip_snippet.split())
+    text = _strip_tip_prefixes(tip_snippet)
     if not text:
         return f"Tip for {game_name}: Play to your position on the board, not just your next move."
 

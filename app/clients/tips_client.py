@@ -30,7 +30,28 @@ _SERP_API_URL = "https://serpapi.com/search"
 _SERPER_API_URL = "https://google.serper.dev/search"
 _TAVILY_API_URL = "https://api.tavily.com/search"
 _API_TIMEOUT_SECONDS = 20
-_MAX_TIP_WORDS = 50
+_MAX_TIP_WORDS = 80
+
+_TIP_LABEL_RE = re.compile(
+    r"^(?:"
+    r"tip(?:s)?"
+    r"|strategy(?:\s+tip)?"
+    r"|hint(?:s)?"
+    r"|advice"
+    r")\s*:\s*",
+    re.IGNORECASE,
+)
+_TIP_FOR_GAME_RE = re.compile(r"^tip\s+for\s+[^:]+:\s*", re.IGNORECASE)
+_ANSWER_PREFIX_RE = re.compile(r"^(?:answer|response|result)\s*:\s*", re.IGNORECASE)
+
+
+def _strip_leading_tip_labels(text: str) -> str:
+    cleaned = " ".join(text.split()).strip()
+    cleaned = _TIP_FOR_GAME_RE.sub("", cleaned)
+    cleaned = _TIP_LABEL_RE.sub("", cleaned)
+    cleaned = _ANSWER_PREFIX_RE.sub("", cleaned)
+    cleaned = re.sub(r"^[-–—]+\s*", "", cleaned)
+    return cleaned.strip()
 
 
 class TipServiceUnavailable(RuntimeError):
@@ -38,7 +59,7 @@ class TipServiceUnavailable(RuntimeError):
 
 
 def _condense_tip_text(text: str, max_words: int = _MAX_TIP_WORDS) -> str:
-    cleaned = " ".join(text.split()).strip()
+    cleaned = _strip_leading_tip_labels(text)
     if not cleaned:
         return ""
 

@@ -4,7 +4,7 @@
   "nodes": [
     {
       "parameters": {
-        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.seenIncomingMessages = staticData.seenIncomingMessages || [];\nstaticData.incomingMessages = staticData.incomingMessages || [];\n\nconst message = $input.item.json.message || {};\nconst chatId = message.chat && message.chat.id;\nconst messageId = message.message_id;\nconst now = Date.now();\nconst seenCutoff = now - 10 * 60 * 1000;\nconst deleteCutoff = now - 48 * 60 * 60 * 1000;\n\nstaticData.seenIncomingMessages = staticData.seenIncomingMessages.filter((m) => m.timestamp >= seenCutoff);\nstaticData.incomingMessages = staticData.incomingMessages.filter((m) => m.timestamp >= deleteCutoff);\n\nif (chatId != null && messageId != null) {\n  const seen = staticData.seenIncomingMessages.some(\n    (m) => m.chatId === chatId && m.messageId === messageId,\n  );\n  if (seen) {\n    return [];\n  }\n\n  staticData.seenIncomingMessages.push({ chatId, messageId, timestamp: now });\n  staticData.incomingMessages.push({ chatId, messageId, timestamp: now });\n}\n\nreturn [{ json: $input.item.json }];"
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.seenIncomingMessages = staticData.seenIncomingMessages || [];\nstaticData.incomingMessages = staticData.incomingMessages || [];\n\nconst message = $input.item.json.message || {};\nconst chatId = message.chat && message.chat.id;\nconst messageId = message.message_id;\nconst now = Date.now();\nconst seenCutoff = now - 10 * 60 * 1000;\nconst deleteCutoff = now - 48 * 60 * 60 * 1000;\nconst backendBaseUrl = 'https://controversial-item-watt-concrete.trycloudflare.com';\n\nstaticData.seenIncomingMessages = staticData.seenIncomingMessages.filter((m) => m.timestamp >= seenCutoff);\nstaticData.incomingMessages = staticData.incomingMessages.filter((m) => m.timestamp >= deleteCutoff);\n\nif (chatId != null && messageId != null) {\n  const seen = staticData.seenIncomingMessages.some(\n    (m) => m.chatId === chatId && m.messageId === messageId,\n  );\n  if (seen) {\n    return [];\n  }\n\n  staticData.seenIncomingMessages.push({ chatId, messageId, timestamp: now });\n  staticData.incomingMessages.push({ chatId, messageId, timestamp: now });\n}\n\nreturn [{ json: { ...$input.item.json, backendBaseUrl } }];"
       },
       "id": "code-dedupe-incoming",
       "name": "Deduplicate Incoming Message",
@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "content": "## Board Game Concierge - Telegram Workflow\n\nSetup:\n1. Create a Telegram credential (Bot Token from BotFather) and assign it to the Telegram Trigger, Send Typing Action, Send Reply, and Delete Old Messages nodes.\n2. IMPORTANT (n8n Cloud): n8n Cloud runs on n8n's own servers, so it cannot reach http://127.0.0.1:8000 - that only works if n8n is self-hosted on the SAME machine as the FastAPI service. For n8n Cloud, the HTTP Request node URLs must point to a PUBLIC URL for the FastAPI service (a tunnel like cloudflared/ngrok for testing, or a real deployment for production). The URL currently in this file is an ephemeral cloudflared quick-tunnel - it changes every time the tunnel restarts, so re-check/update all HTTP Request node URLs whenever that happens.\n3. Make sure the FastAPI service (`python -m uvicorn app.server:app`) is running and reachable at whatever URL you put in the HTTP Request nodes.\n4. Workflow static data (used for /reset's message tracking, see below) only persists across PRODUCTION executions - i.e. this workflow needs to be Active and triggered by real Telegram messages. Manually clicking \"Execute Workflow\" in the editor won't accumulate or read the same static data.\n\nRouting:\n- Every message triggers \"Send Typing Action\" immediately (parallel branch off the trigger, dead-end - doesn't block or feed into routing) so Telegram shows \"typing...\" while the real reply is worked out. It's a single ~5s indicator (Telegram Bot API limit), not a repeating one, so it can expire before slower LLM calls finish - that's expected for v1.\n- IMPORTANT: \"Send Reply\" uses operation sendMessage, which n8n's Telegram node defaults to appending \"This message was sent automatically with n8n\" to (additionalFields.appendAttribution defaults to true when unset, for nodeVersion >= 1.1) - it's explicitly set to false here. If you ever add another sendMessage-operation node to this workflow, remember to set it there too or that footer will silently reappear.\n- /start, or bare /help -> calls /greeting for a personalized onboarding message (randomly varied wording, see app/phrasing.py)\n- /reset -> clears this chat's session/pending state on the backend (POST /reset) AND best-effort deletes the last 48 hours of Telegram messages for this chat that the workflow has seen (both bot replies and incoming user commands, since Telegram's Bot API can delete incoming private-chat messages too). Message IDs are tracked in n8n's own workflow static data by \"Deduplicate Incoming Message\" and \"Track Sent Message\" (the former records incoming user messages, the latter records sendMessage responses) - NOT in the Python backend, which has no visibility into Telegram message IDs at all. \"Build Delete List\" reads/prunes those stores and fans out one deleteMessage call per message via \"Delete Old Messages\"; this runs in parallel with \"Call /reset API\" -> Send Reply (same fan-out pattern as the typing indicator) so a 0-message delete list doesn't block the confirmation reply from being sent.\n- /help <game name> (e.g. \"/help Wingspan\") -> calls /report for that game (same digest as the free-text trigger below)\n- /list -> calls /games for the current rulebook library\n- /tips -> calls /tips for a strategy tip on the session's game (SerpApi/Brave AI Mode, rotates through search snippets so repeat askers for the same game don't get the same tip - see app/clients/tips_client.py). Needs SERP_API_KEY in .env.\n- /ask <question> -> calls /ask (one grounded follow-up per session)\n- /recommend <player count> <preferences> -> calls /recommend (one primary pick + two alternatives; asks for player count if missing)\n- anything else (e.g. \"we're playing Ticket to Ride tonight\") -> calls /report\n\nCanned edge-case replies (unknown game, no session yet, missing player count, no rulebook coverage, etc.) are randomly picked from a few variants each - see app/phrasing.py - so repeat visitors don't see the exact same sentence every time.",
+        "content": "## Board Game Concierge - Telegram Workflow\n\nSetup:\n1. Create a Telegram credential (Bot Token from BotFather) and assign it to the Telegram Trigger, Send Typing Action, Send Reply, and Delete Old Messages nodes.\n2. IMPORTANT (n8n Cloud): n8n Cloud runs on n8n's own servers, so it cannot reach http://127.0.0.1:8000 - that only works if n8n is self-hosted on the SAME machine as the FastAPI service. For n8n Cloud, the HTTP Request node URLs must point to a PUBLIC URL for the FastAPI service (a tunnel like cloudflared/ngrok for testing, or a real deployment for production). \n3. Make sure the FastAPI service (`python -m uvicorn app.server:app`) is running and reachable at whatever URL you put in the HTTP Request nodes.\n4. Workflow static data (used for /reset's message tracking, see below) only persists across PRODUCTION executions - i.e. this workflow needs to be Active and triggered by real Telegram messages. Manually clicking \"Execute Workflow\" in the editor won't accumulate or read the same static data.\n\nRouting:\n- Every message triggers \"Send Typing Action\" immediately (parallel branch off the trigger, dead-end - doesn't block or feed into routing) so Telegram shows \"typing...\" while the real reply is worked out. It's a single ~5s indicator (Telegram Bot API limit), not a repeating one, so it can expire before slower LLM calls finish - that's expected for v1.\n- IMPORTANT: \"Send Reply\" uses operation sendMessage, which n8n's Telegram node defaults to appending \"This message was sent automatically with n8n\" to (additionalFields.appendAttribution defaults to true when unset, for nodeVersion >= 1.1) - it's explicitly set to false here. If you ever add another sendMessage-operation node to this workflow, remember to set it there too or that footer will silently reappear.\n- /start, or bare /help -> calls /greeting for a personalized onboarding message (randomly varied wording, see app/phrasing.py)\n- /reset -> clears this chat's session/pending state on the backend (POST /reset) AND best-effort deletes the last 48 hours of Telegram messages for this chat that the workflow has seen (both bot replies and incoming user commands, since Telegram's Bot API can delete incoming private-chat messages too). Message IDs are tracked in n8n's own workflow static data by \"Deduplicate Incoming Message\" and \"Track Sent Message\" (the former records incoming user messages, the latter records sendMessage responses) - NOT in the Python backend, which has no visibility into Telegram message IDs at all. \"Build Delete List\" reads/prunes those stores and fans out one deleteMessage call per message via \"Delete Old Messages\"; this runs in parallel with \"Call /reset API\" -> Send Reply (same fan-out pattern as the typing indicator) so a 0-message delete list doesn't block the confirmation reply from being sent.\n- /help <game name> (e.g. \"/help Wingspan\") -> calls /report for that game (same digest as the free-text trigger below)\n- /list -> calls /games for the current rulebook library\n- /tips -> calls /tips for a strategy tip on the session's game (SerpApi/Brave AI Mode, rotates through search snippets so repeat askers for the same game don't get the same tip - see app/clients/tips_client.py). Needs SERP_API_KEY in .env.\n- /ask <question> -> calls /ask (one grounded follow-up per session)\n- /recommend <player count> <preferences> -> calls /recommend (one primary pick + two alternatives; asks for player count if missing)\n- anything else (e.g. \"we're playing Ticket to Ride tonight\") -> calls /report\n\nCanned edge-case replies (unknown game, no session yet, missing player count, no rulebook coverage, etc.) are randomly picked from a few variants each - see app/phrasing.py - so repeat visitors don't see the exact same sentence every time.",
         "height": 500,
         "width": 460,
         "color": 5
@@ -89,7 +89,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const text = $input.item.json.message.text || '';\nconst question = text.replace(/^\\/ask\\s+/i, '').trim();\nreturn [{ json: { question } }];"
+        "jsCode": "const text = $input.item.json.message.text || '';\nconst question = text.replace(/^\\/ask\\s+/i, '').trim();\nreturn [{ json: { question, backendBaseUrl: $input.item.json.backendBaseUrl } }];"
       },
       "id": "code-extract-question",
       "name": "Extract Ask Question",
@@ -103,7 +103,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/ask",
+        "url": "={{ $json.backendBaseUrl + '/ask' }}",
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "keypair",
@@ -139,7 +139,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/report",
+        "url": "={{ $json.backendBaseUrl + '/report' }}",
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "keypair",
@@ -207,7 +207,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const text = $input.item.json.message.text || '';\nconst preferences = text.replace(/^\\/recommend\\s*/i, '').trim();\nreturn [{ json: { preferences } }];"
+        "jsCode": "const text = $input.item.json.message.text || '';\nconst preferences = text.replace(/^\\/recommend\\s*/i, '').trim();\nreturn [{ json: { preferences, backendBaseUrl: $input.item.json.backendBaseUrl } }];"
       },
       "id": "code-extract-recommend",
       "name": "Extract Recommend Params",
@@ -221,7 +221,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/recommend",
+        "url": "={{ $json.backendBaseUrl + '/recommend' }}",
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "keypair",
@@ -348,7 +348,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/games",
+        "url": "={{ $json.backendBaseUrl + '/games' }}",
         "options": {
           "timeout": 60000
         }
@@ -402,7 +402,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/greeting",
+        "url": "={{ $json.backendBaseUrl + '/greeting' }}",
         "options": {
           "timeout": 60000
         }
@@ -478,7 +478,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/tips",
+        "url": "={{ $json.backendBaseUrl + '/tips' }}",
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "keypair",
@@ -513,7 +513,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const text = $input.item.json.message.text || '';\nconst game = text.replace(/^\\/tips?\\s*/i, '').trim();\nreturn [{ json: { game } }];"
+        "jsCode": "const text = $input.item.json.message.text || '';\nconst game = text.replace(/^\\/tips?\\s*/i, '').trim();\nreturn [{ json: { game, backendBaseUrl: $input.item.json.backendBaseUrl } }];"
       },
       "id": "code-extract-tips-game",
       "name": "Extract Tips Game",
@@ -609,7 +609,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://fallen-somehow-believe-propecia.trycloudflare.com/reset",
+        "url": "={{ $json.backendBaseUrl + '/reset' }}",
         "sendBody": true,
         "contentType": "json",
         "specifyBody": "keypair",

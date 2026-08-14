@@ -92,6 +92,12 @@ _MISSING_TIPS_GAME_VARIANTS = [
     "Give me the game name, and I'll pull a tip for it.",
 ]
 
+_AMBIGUOUS_GAME_REFERENCE_VARIANTS = [
+    "Hey, I see you're getting excited about the game night, but lets take it one by one. "
+    "We were talking about {current_game} but you're now referring to {referenced_game}. "
+    "Can you clarify that for me please?",
+]
+
 _TIPS_SERVICE_UNAVAILABLE_VARIANTS = [
     "I'm having trouble reaching my tip source for {game_name} right now, "
     "so I'm skipping strategy tips for the moment. Try again in a little "
@@ -149,6 +155,7 @@ _VARIANTS: dict[str, list[str]] = {
     "no_candidates_with_rating": _NO_CANDIDATES_WITH_RATING_VARIANTS,
     "no_tips": _NO_TIPS_VARIANTS,
     "missing_tips_game": _MISSING_TIPS_GAME_VARIANTS,
+    "ambiguous_game_reference": _AMBIGUOUS_GAME_REFERENCE_VARIANTS,
     "tips_service_unavailable": _TIPS_SERVICE_UNAVAILABLE_VARIANTS,
     "reset": _RESET_VARIANTS,
 }

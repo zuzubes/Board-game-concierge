@@ -109,3 +109,23 @@ def resolve_game(query: str) -> dict | None:
             return index[close[0]]
 
     return None
+
+
+def find_direct_game_mentions(query: str) -> list[dict]:
+    """Return catalog rows whose names appear directly in the text.
+
+    This is intentionally stricter than resolve_game(): it only treats a game
+    as mentioned when its normalized name appears as a whole-word sequence in
+    the query, without fuzzy matching.
+    """
+    index = _load_index()
+    normalized_query = f" {_normalize(query)} "
+    matches = [
+        row
+        for name, row in index.items()
+        if name
+        and len(name.replace(" ", "")) >= 5
+        and f" {name} " in normalized_query
+    ]
+    matches.sort(key=lambda row: len(_normalize(row["name"])), reverse=True)
+    return matches
